@@ -1,10 +1,8 @@
 package campalans.m8.cameraappjc
 
-import android.content.Context
-import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
-import android.provider.MediaStore
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -14,15 +12,17 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
-import coil.compose.AsyncImage
+import androidx.media3.common.MediaItem
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
 import java.io.File
 import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import java.util.*
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -42,30 +42,46 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun CameraScreen() {
+
     val context = LocalContext.current
-    var imageUri by remember { mutableStateOf<Uri?>(null) }
-    var capturedImageUri by remember { mutableStateOf<Uri?>(null) }
+    var permissionStatus by remember { mutableStateOf(" Permission not Requested") }
 
-    // Launcher per capturar la foto
-    val cameraLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.TakePicture()
-    ) { success ->
-        if (success) {
-            capturedImageUri = imageUri
-        }
-    }
+    var videoUri by remember { mutableStateOf<Uri?>(null) }
+    var recordedVideoUri by remember { mutableStateOf<Uri?>(null) }
 
-    // Funció per crear el fitxer i obtenir l'URI
-    fun createImageFile(): Uri {
-        val imageFile = File(
+    fun createVideoFile(): Uri {
+        val videoFile = File(
             context.getExternalFilesDir(null),
-            "Denis_Cracana_${SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())}.png"
+            "Denis_Cracana_${SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.getDefault()).format(Date())}.mp4"
         )
+
         return FileProvider.getUriForFile(
             context,
             "${context.packageName}.provider",
-            imageFile
+            videoFile
         )
+    }
+
+    // Launcher per gravar vídeo
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CaptureVideo()
+    ) { success ->
+        if (success) {
+            recordedVideoUri = videoUri
+        }
+    }
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { grantedPermission ->
+
+        val cameraGranted = grantedPermission[android.Manifest.permission.CAMERA] ?: false
+
+        permissionStatus = if (cameraGranted) "Permission Granted" else "Permission denied"
+
+        if (cameraGranted) {
+            videoUri = createVideoFile()
+            cameraLauncher.launch(videoUri!!)
+        }
     }
 
     Column(
@@ -75,38 +91,50 @@ fun CameraScreen() {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+
+        val granted = ContextCompat.checkSelfPermission(
+            LocalContext.current,
+            android.Manifest.permission.CAMERA
+        ) == PackageManager.PERMISSION_GRANTED
+
         Text(
-            text = "Càmera amb Intent",
+            text = "Càmera Vídeo amb Intent",
             style = MaterialTheme.typography.headlineMedium
         )
 
         Button(
             onClick = {
-                imageUri = createImageFile()
-                cameraLauncher.launch(imageUri!!)
+                if (!granted) {
+                    permissionLauncher.launch(
+                        arrayOf(
+                            android.Manifest.permission.CAMERA,
+                            android.Manifest.permission.READ_EXTERNAL_STORAGE
+                        )
+                    )
+                } else {
+                    videoUri = createVideoFile()
+                    cameraLauncher.launch(videoUri!!)
+                }
             },
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text("Obrir Càmera")
+            Text("Gravar vídeo")
         }
 
-        // Mostrar la imatge capturada
-        capturedImageUri?.let { uri ->
+        // Mostrar el vídeo capturat amb Media3
+        recordedVideoUri?.let { uri ->
+
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f),
                 elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
             ) {
-                AsyncImage(
-                    model = uri,
-                    contentDescription = "Foto capturada",
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
-                )
-
+                VideoPlayer(uri)
             }
+
         } ?: run {
+
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -115,13 +143,44 @@ fun CameraScreen() {
                     containerColor = MaterialTheme.colorScheme.surfaceVariant
                 )
             ) {
+
                 Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("La imatge apareixerà aquí")
+
+                    Text("El vídeo apareixerà aquí")
                 }
             }
         }
     }
+}
+
+@Composable
+fun VideoPlayer(videoUri: Uri) {
+    val context = LocalContext.current
+
+    val exoPlayer = remember {
+        ExoPlayer.Builder(context).build().apply {
+            val mediaItem = MediaItem.fromUri(videoUri)
+            setMediaItem(mediaItem)
+            prepare()
+            play()
+        }
+    }
+
+    DisposableEffect(videoUri) {
+        onDispose {
+            exoPlayer.release()
+        }
+    }
+
+    AndroidView(
+        factory = {
+            PlayerView(context).apply {
+                player = exoPlayer
+            }
+        },
+        modifier = Modifier.fillMaxSize()
+    )
 }
